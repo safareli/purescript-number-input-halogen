@@ -20,9 +20,12 @@ main = HA.runHalogenAff do
   body ← HA.awaitBody
   runUI example unit body
 
-data Query a = HandleMsg NumInputIdx (NI.Message Number) a
+data Query a
+  = HandleMsg NumInputIdx (NI.Message Number) a
+  | Inc a
 
-type State = {}
+type State = Int
+
 type NumInputIdx = Int
 type ChildQuery = Coproduct.Coproduct1 (NI.Query Number)
 type Slot = Either.Either1 NumInputIdx
@@ -38,32 +41,40 @@ type DSL m = H.ParentDSL State Query ChildQuery Slot Void m
 
 example ∷ ∀ m. H.Component HH.HTML Query Unit Void m
 example = H.parentComponent
-    { initialState: const {}
+    { initialState: const 0
     , render
     , eval
     , receiver: const Nothing
     }
 
 render ∷ ∀ m. State → HTML m
-render _ = HH.div_
-  $  [ HH.h1_ [ HH.text "input 1" ]]
-  <> [ HH.slot' cpNumInput 0 (NI.input NI.numberHasNumberInputVal numConfig) unit (HE.input (HandleMsg 0))]
-  <> [ HH.h1_ [ HH.text "input 2" ]]
-  <> [ HH.slot' cpNumInput 1 (NI.input NI.numberHasNumberInputVal numConfig') unit (HE.input (HandleMsg 1))]
+render count = HH.div_
+  [ HH.h1_ [ HH.text "input 1" ]
+  , HH.slot' cpNumInput 0 NI.input numProps (HE.input (HandleMsg 0))
+  , HH.h1_ [ HH.text "input 2" ]
+  , HH.slot' cpNumInput 1 NI.input numProps' (HE.input (HandleMsg 1))
+  , HH.p_ [ HH.text $ show count ]
+  , HH.button [ HE.onClick (HE.input_ Inc) ] [HH.text "inc"]
+  ]
 
 eval ∷ ∀ m. Query ~> DSL m
-eval (HandleMsg _ _ next) = pure next
+eval (HandleMsg _ _ next) = eval (Inc next)
+eval (Inc next) = do
+  count <- H.get
+  H.put $ count + 1
+  pure next
 
-numConfig' :: NI.Config Number
-numConfig' = numConfig
+numProps' :: NI.Props Number
+numProps' = numProps
   { range = MinMax 0.0 999.0
   , placeholder = "***"
   }
 
-numConfig :: NI.Config Number
-numConfig =
+numProps :: NI.Props Number
+numProps =
   { title: "title"
   , placeholder: "**"
+  , hasNumberValue: NI.numberHasNumberInputValue
   , range: MinMax 0.0 99.0
   , root: [HH.ClassName "NumberInput"]
   , rootInvalid: [HH.ClassName "NumberInput--invalid"]

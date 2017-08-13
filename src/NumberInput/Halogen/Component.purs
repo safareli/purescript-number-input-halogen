@@ -2,14 +2,14 @@ module NumberInput.Halogen.Component
   ( input
   , Query(..)
   , Message(..)
-  , Config
+  , Props
   , Input
   , InputValue
   , mkInputValue
-  , HasNumberInputVal
-  , numberHasNumberInputVal
-  , intHasNumberInputVal
-  , boundedEnumHasNumberInputVal )
+  , HasNumberInputValue
+  , numberHasNumberInputValue
+  , intHasNumberInputValue
+  , boundedEnumHasNumberInputValue )
   where
 
 import Prelude
@@ -20,15 +20,15 @@ import Control.Monad.Except (runExcept)
 import Control.MonadPlus (guard)
 import DOM.Event.Event (Event)
 import Data.Bifunctor (lmap)
-import Data.Enum (class BoundedEnum, fromEnum, toEnum)
 import Data.Either (Either, either)
+import Data.Enum (class BoundedEnum, fromEnum, toEnum)
 import Data.Foreign (readBoolean, readString, toForeign)
 import Data.Foreign.Index (readProp)
 import Data.Int as Int
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Number as N
 import Data.String (Pattern(..), length, stripSuffix)
-import Data.Tuple (Tuple(..), fst)
+import Data.Tuple (Tuple(..), fst, snd)
 import Halogen as H
 import Halogen.HTML as HH
 import Halogen.HTML.CSS as HCSS
@@ -36,9 +36,13 @@ import Halogen.HTML.Core (ClassName)
 import Halogen.HTML.Events as HE
 import Halogen.HTML.Properties as HP
 import NumberInput.Range (Range(..), isInRange, rangeMax, rangeMin)
+import Unsafe.Reference (unsafeRefEq)
 
 
-type State val = InputValue val
+type State val =
+  { value ∷ InputValue val
+  , props ∷ Props val
+  }
 
 data Message val = NotifyChange (Input val)
 type Input val = Maybe val
@@ -46,47 +50,61 @@ data Query val next
   = GetValue (Input val → next)
   | SetValue (Input val) next
   | Update (InputValue val) next
+  | SetProps (Props val) next
 
 type DSL val = H.ComponentDSL (State val) (Query val) (Message val)
 type HTML val = H.ComponentHTML (Query val)
 
-type Config val =
+type Props val =
   { title ∷ String
   , placeholder ∷ String
+  , hasNumberValue ∷ HasNumberInputValue val
   , range ∷ Range val
   , root ∷ Array ClassName
   , rootInvalid ∷ Array ClassName
-  , rootLength ∷ Int -> Array ClassName
+  , rootLength ∷ Int → Array ClassName
   }
+
 
 input ∷ ∀ val m
   . Ord val
-  ⇒ HasNumberInputVal val
-  → Config val
-  → H.Component HH.HTML (Query val) Unit (Message val) m
-input hasNumberInputVal conf = H.component
-  { initialState: const emptyNumberInputValue
-  , render: render hasNumberInputVal conf
-  , eval: eval hasNumberInputVal
-  , receiver: const Nothing
+  ⇒ H.Component HH.HTML (Query val) (Props val) (Message val) m
+input = H.component
+  { initialState: { value: emptyNumberInputValue, props: _}
+  , render: render
+  , eval: eval
+  , receiver: HE.input SetProps
   }
 
-render ∷ ∀ val. Ord val ⇒ HasNumberInputVal val → Config val → State val → HTML val
-render hasNumberInputVal conf num = numberElement hasNumberInputVal conf num
-
-eval ∷ ∀ val m . Eq val ⇒ HasNumberInputVal val → Query val ~> DSL val m
-eval hasNumberInputVal (SetValue number next) = do
-  H.put $ Tuple number (toMbString hasNumberInputVal number)
+eval ∷ ∀ val m . Eq val ⇒ Query val ~> DSL val m
+eval (SetProps props next) = do
+  state <- H.get
+  unless (unsafeRefEq props state.props) do
+    let strVal = snd state.value
+    putAndNotify state
+      { props: props
+      , value: Tuple (strVal >>= props.hasNumberValue.fromString) strVal
+      }
   pure next
-eval _ (GetValue next) = H.get <#> (fst >>> next)
-eval _ (Update number next) = do
-  prevNumber ← H.get
-  H.put number
-  unless (number == prevNumber) $ H.raise (NotifyChange $ fst number)
+eval (SetValue number next) = do
+  state <- H.get
+  H.put $ state{value = Tuple number (toMbString state.props.hasNumberValue number)}
+  pure next
+eval (GetValue next) =
+  H.get <#> (_.value >>> fst >>> next)
+eval (Update number next) = do
+  state ← H.get
+  putAndNotify state (state{value = number})
   pure next
 
-toMbString ∷ ∀ a. HasNumberInputVal a → Maybe a → Maybe String
-toMbString hasNumberInputVal number = (Just $ maybe "" hasNumberInputVal.toValue number)
+putAndNotify :: ∀ m val . Eq val ⇒ State val → State val → DSL val m Unit
+putAndNotify oldstate state = do
+  H.put state
+  let nextVal = fst state.value
+  unless (fst oldstate.value == nextVal) $ H.raise (NotifyChange $ nextVal)
+
+toMbString ∷ ∀ a. HasNumberInputValue a → Maybe a → Maybe String
+toMbString { toValue } number = (Just $ maybe "" toValue number)
 
 
 type InputValue a = Tuple (Maybe a) (Maybe String)
@@ -94,8 +112,8 @@ type InputValue a = Tuple (Maybe a) (Maybe String)
 toString ∷ ∀ a. InputValue a → String
 toString (Tuple _ mbStr) = fromMaybe "" mbStr
 
-mkInputValue ∷ ∀ a. HasNumberInputVal a → a → InputValue a
-mkInputValue hasNumberInputVal n = Tuple (Just n) (Just $ hasNumberInputVal.toValue n)
+mkInputValue ∷ ∀ a. HasNumberInputValue a → a → InputValue a
+mkInputValue { toValue } n = Tuple (Just n) (Just $ toValue n)
 
 emptyNumberInputValue ∷ ∀ a. InputValue a
 emptyNumberInputValue = Tuple Nothing (Just "")
@@ -115,26 +133,24 @@ showNum 0.0 = "0"
 showNum n = let str = show n
   in fromMaybe str (stripSuffix (Pattern ".0") str)
 
-numberElement ∷ ∀ val
+render ∷ ∀ val
   . Ord val
-  ⇒ HasNumberInputVal val
-  → Config val
-  → InputValue val
+  ⇒ State val
   → HTML val
-numberElement hasNumberInputVal conf value = HH.input $
+render {props, value} = HH.input $
   [ HP.type_ HP.InputNumber
   , HP.classes classes
-  , HP.title conf.title
-  , HP.placeholder conf.placeholder
+  , HP.title props.title
+  , HP.placeholder props.placeholder
   , HP.value valueStr
   , HE.onInput $ HE.input $
     inputValueFromEvent
     >>> parseValidInput
-    >>> isInputInRange conf.range
+    >>> isInputInRange props.range
     >>> Update
   ]
-  <> (toArray (rangeMin conf.range) <#> hasNumberInputVal.toNumber >>> HP.min)
-  <> (toArray (rangeMax conf.range) <#> hasNumberInputVal.toNumber >>> HP.max)
+  <> (toArray (rangeMin props.range) <#> props.hasNumberValue.toNumber >>> HP.min)
+  <> (toArray (rangeMax props.range) <#> props.hasNumberValue.toNumber >>> HP.max)
   <> [styles]
   where
   toArray = maybe [] pure
@@ -146,24 +162,24 @@ numberElement hasNumberInputVal conf value = HH.input $
   --  * if user types `1e1` we will parse it as `10`
   parseValidInput ∷ InputValue String → InputValue val
   parseValidInput = lmap $ (=<<) \str → do
-    val ← hasNumberInputVal.fromString str
-    guard (hasNumberInputVal.toValue val == str)
+    val ← props.hasNumberValue.fromString str
+    guard (props.hasNumberValue.toValue val == str)
     pure val
 
   valueStr = toString value
-  sizeClass = case conf.range of
+  sizeClass = case props.range of
     MinMax minVal maxVal →
-      conf.rootLength (max
-        (length $ hasNumberInputVal.toValue minVal)
-        (length $ hasNumberInputVal.toValue maxVal)
+      props.rootLength (max
+        (length $ props.hasNumberValue.toValue minVal)
+        (length $ props.hasNumberValue.toValue maxVal)
       )
     _ → []
-  classes = conf.root
+  classes = props.root
     <> sizeClass
-    <> (guard (isInvalid value) *> conf.rootInvalid)
+    <> (guard (isInvalid value) *> props.rootInvalid)
   controlWidth = 0.75
   styles = HCSS.style do
-    case conf.range of
+    case props.range of
       MinMax _ _ → pure unit
       _ | isInvalid value → pure unit
       _ | isEmpty value → CSS.width $ CSS.em 2.25
@@ -193,29 +209,29 @@ validValueFromEvent event = join $ asRight $ runExcept $ do
   value ← readProp "value" target >>= readString
   pure (if badInput then Nothing else Just value)
 
-type HasNumberInputVal a  =
+type HasNumberInputValue a  =
   { fromString ∷ String → Maybe a
   , toValue ∷ a → String
   , toNumber ∷ a → Number
   }
 
-numberHasNumberInputVal ∷ HasNumberInputVal Number
-numberHasNumberInputVal =
+numberHasNumberInputValue ∷ HasNumberInputValue Number
+numberHasNumberInputValue =
   { fromString: N.fromString
   , toValue: showNum
   , toNumber: id
   }
 
-intHasNumberInputVal ∷ HasNumberInputVal Int
-intHasNumberInputVal =
-  { fromString: numberHasNumberInputVal.fromString >=> Int.fromNumber
+intHasNumberInputValue ∷ HasNumberInputValue Int
+intHasNumberInputValue =
+  { fromString: numberHasNumberInputValue.fromString >=> Int.fromNumber
   , toValue: show
   , toNumber: Int.toNumber
   }
 
-boundedEnumHasNumberInputVal ∷ ∀ a. BoundedEnum a ⇒ HasNumberInputVal a
-boundedEnumHasNumberInputVal =
-  { fromString: intHasNumberInputVal.fromString >=> toEnum
-  , toValue: fromEnum >>> intHasNumberInputVal.toValue
-  , toNumber: fromEnum >>> intHasNumberInputVal.toNumber
+boundedEnumHasNumberInputValue ∷ ∀ a. BoundedEnum a ⇒ HasNumberInputValue a
+boundedEnumHasNumberInputValue =
+  { fromString: intHasNumberInputValue.fromString >=> toEnum
+  , toValue: fromEnum >>> intHasNumberInputValue.toValue
+  , toNumber: fromEnum >>> intHasNumberInputValue.toNumber
   }
