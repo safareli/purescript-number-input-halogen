@@ -143,6 +143,7 @@ render {props, value} = HH.input $
   , HP.title props.title
   , HP.placeholder props.placeholder
   , HP.value valueStr
+  , HP.step $ maybe HP.Any HP.Step props.hasNumberValue.step
   , HE.onInput $ HE.input $
     inputValueFromEvent
     >>> parseValidInput
@@ -213,6 +214,7 @@ type HasNumberInputValue a  =
   { fromString ∷ String → Maybe a
   , toValue ∷ a → String
   , toNumber ∷ a → Number
+  , step ∷ Maybe Number
   }
 
 numberHasNumberInputValue ∷ HasNumberInputValue Number
@@ -220,6 +222,7 @@ numberHasNumberInputValue =
   { fromString: N.fromString
   , toValue: showNum
   , toNumber: id
+  , step: Nothing
   }
 
 intHasNumberInputValue ∷ HasNumberInputValue Int
@@ -227,6 +230,7 @@ intHasNumberInputValue =
   { fromString: numberHasNumberInputValue.fromString >=> Int.fromNumber
   , toValue: show
   , toNumber: Int.toNumber
+  , step: Just 1.0
   }
 
 boundedEnumHasNumberInputValue ∷ ∀ a. BoundedEnum a ⇒ HasNumberInputValue a
@@ -234,4 +238,5 @@ boundedEnumHasNumberInputValue =
   { fromString: intHasNumberInputValue.fromString >=> toEnum
   , toValue: fromEnum >>> intHasNumberInputValue.toValue
   , toNumber: fromEnum >>> intHasNumberInputValue.toNumber
+  , step: intHasNumberInputValue.step
   }
