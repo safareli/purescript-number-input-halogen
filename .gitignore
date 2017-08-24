@@ -9,3 +9,4 @@ output
 example/example.js
 
 .psc-ide-port
+.pulp-cache

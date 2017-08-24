@@ -23,6 +23,7 @@
     "purescript-enums": "^3.2.0",
     "purescript-halogen": "^2.0.1",
     "purescript-halogen-css": "^6.0.0",
-    "purescript-numbers": "^5.0.0"
+    "purescript-numbers": "^5.0.0",
+    "purescript-unsafe-reference": "^2.0.0"
   }
 }
